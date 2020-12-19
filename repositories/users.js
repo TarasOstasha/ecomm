@@ -1,83 +1,40 @@
 const fs = require('fs');
 const crypto = require('crypto');
+const util = require('util');
+const Repository = require('./repository');
+const scrypt = util.promisify(crypto.scrypt);
 
-class UserRepository {
-    constructor(filename) {
-        if (!filename) {
-            throw new Error('Creating a repository requires a filename');
-        }
-        this.filename = filename;
-        try {
-            fs.accessSync(this.filename);
-        } catch (error) {
-            fs.writeFileSync(this.filename, '[]');
-        }
-    }
-
-    async getAll() {
-        // open file
-        const records = await fs.promises.readFile(this.filename, {
-            encoding: 'utf8'
-        });
-        return JSON.parse(records);
-    }
-
+class UserRepository extends Repository {
     async create(attrs) {
+        // attrs === { email: '', password: '' }
         attrs.id = this.randomId();
+
+        const salt = crypto.randomBytes(8).toString('hex');
+        const buf = await scrypt(attrs.password, salt, 64);
+
         const records = await this.getAll();
-        records.push(attrs);
+        const record = {
+            ...attrs,
+            password: `${buf.toString('hex')}.${salt}`
+        }
+        records.push(record);
         // write the updated 'records' array back to this.filename
         await this.writeAll(records);
-    }
-    async writeAll(records) {
-        await fs.promises.writeFile(this.filename, JSON.stringify(records, null, 2), 'utf8');
+        return record;
     }
 
-    randomId() {
-        return crypto.randomBytes(4).toString('hex');
-    }
+    async comparePasswords(saved, supplied) {
+        // Saved -> password saved in our database. 'hashed.salt'
+        // Supplied -> password given to us by a user trying to sign in
+        const [hashed, salt] = saved.split('.');
+        // OR (the same method)
+        //const result = saved.split('.');
+        //const hashed = result[0];
+        //const salt = result[1];
+        const hashedSuppliedBuf = await scrypt(supplied, salt, 64);
 
-    async getOne(id) {
-        const records = await this.getAll();
-        return records.find(record => record.id === id);
-    }
+        return hashed === hashedSuppliedBuf.toString('hex');
 
-    async delete(id) {
-        const records = await this.getAll();
-        const filteredRecords = records.filter(record => record.id !== id);
-        await this.writeAll(filteredRecords);
-    }
-
-    async update(id, attrs) {
-        const records = await this.getAll();
-        const record = records.find(record => record.id === id);
-        if (!record) throw new Error(`Record with id ${id} not found`);
-        // Функция Object.assign получает список объектов и копирует в первый target свойства из остальных.
-        // example START ***
-        // let user = { name: "Вася" };
-        // let visitor = { isAdmin: false, visits: true };
-        // let admin = { isAdmin: true };
-        // Object.assign(user, visitor, admin);
-        // user <- visitor <- admin
-        // alert(JSON.stringify(user)); // name: Вася, visits: true, isAdmin: true
-        // example END ***
-        Object.assign(record, attrs);
-        await this.writeAll(records);
-    }
-
-    async getOneBy(filters) {
-        const records = await this.getAll();
-        for( let record of records ) {
-            let found = true;
-            for( let key in filters ) {
-                if( record[key] !== filters[key] ) {
-                    found = false;
-                }
-            }
-            if(found) {
-                return record;
-            }
-        }
     }
 
 }
